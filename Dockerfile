@@ -1,9 +1,11 @@
 # syntax = docker/dockerfile:1.1-experimental
 
 ARG RUNC_VERSION=v1.0.0-rc10
-ARG CONTAINERD_VERSION=v1.3.2
+# ARG CONTAINERD_VERSION=v1.3.2
+ARG CONTAINERD_VERSION=ff48f57fc83a8
 # containerd v1.2 for integration tests
-ARG CONTAINERD_OLD_VERSION=v1.2.11
+# ARG CONTAINERD_OLD_VERSION=v1.2.11
+ARG CONTAINERD_OLD_VERSION=f772c10a585c
 # available targets: buildkitd, buildkitd.oci_only, buildkitd.containerd_only
 ARG BUILDKIT_TARGET=buildkitd
 ARG REGISTRY_VERSION=2.7.1
@@ -13,8 +15,11 @@ ARG CNI_VERSION=v0.8.5
 ARG SHADOW_VERSION=4.8.1
 ARG FUSEOVERLAYFS_VERSION=v0.7.6
 
+ARG APT_MIRROR=192.168.0.103:18848
+
 # git stage is used for checking out remote repository sources
 FROM --platform=$BUILDPLATFORM alpine AS git
+RUN sed -i 's/dl-cdn.alpinelinux.org/192.168.0.103:18848/g' /etc/apk/repositories
 RUN apk add --no-cache git xz
 
 # xgo is a helper for golang cross-compilation
@@ -23,10 +28,12 @@ FROM --platform=$BUILDPLATFORM tonistiigi/xx:golang@sha256:6f7d999551dd471b58f70
 # gobuild is base stage for compiling go/cgo
 FROM --platform=$BUILDPLATFORM golang:1.13-buster AS gobuild-minimal
 COPY --from=xgo / /
+RUN sed -ri "s/(security|archive|deb).debian.org/192.168.0.103:18848/g" /etc/apt/sources.list
 RUN apt-get update && apt-get install --no-install-recommends -y libseccomp-dev file
 
 # on amd64 you can also cross-compile to other platforms
 FROM gobuild-minimal AS gobuild-cross-amd64
+RUN sed -ri "s/(security|archive|deb).debian.org/192.168.0.103:18848/g" /etc/apt/sources.list
 RUN dpkg --add-architecture s390x && \
   dpkg --add-architecture ppc64el && \
   dpkg --add-architecture armel && \
@@ -115,6 +122,7 @@ COPY --from=buildctl /usr/bin/buildctl /buildctl.exe
 FROM binaries-$TARGETOS AS binaries
 
 FROM --platform=$BUILDPLATFORM alpine AS releaser
+RUN sed -i 's/dl-cdn.alpinelinux.org/192.168.0.103:18848/g' /etc/apk/repositories
 RUN apk add --no-cache tar gzip
 WORKDIR /work
 ARG TARGETPLATFORM
@@ -132,9 +140,10 @@ VOLUME /var/lib/buildkit
 FROM git AS containerd-src
 ARG CONTAINERD_VERSION
 WORKDIR /usr/src
-RUN git clone https://github.com/containerd/containerd.git containerd
+RUN git clone http://192.168.0.103:8080/chenbin/Containerd.git containerd
 
 FROM gobuild-base AS containerd-base
+RUN sed -ri "s/(security|archive|deb).debian.org/192.168.0.103:18848/g" /etc/apt/sources.list
 RUN apt-get --no-install-recommends install -y btrfs-progs libbtrfs-dev
 WORKDIR /go/src/github.com/containerd/containerd
 
@@ -142,7 +151,7 @@ FROM containerd-base AS containerd
 ARG CONTAINERD_VERSION
 RUN --mount=from=containerd-src,src=/usr/src/containerd,readwrite --mount=target=/root/.cache,type=cache \
   git fetch origin \
-  && git checkout -q "$CONTAINERD_VERSION" \
+  && git checkout -q $CONTAINERD_VERSION \
   && make bin/containerd \
   && make bin/containerd-shim \
   && make bin/ctr \
@@ -153,7 +162,7 @@ FROM containerd-base as containerd-old
 ARG CONTAINERD_OLD_VERSION
 RUN --mount=from=containerd-src,src=/usr/src/containerd,readwrite --mount=target=/root/.cache,type=cache \
   git fetch origin \
-  && git checkout -q "$CONTAINERD_OLD_VERSION" \
+  && git checkout -q $CONTAINERD_OLD_VERSION \
   && make bin/containerd \
   && make bin/containerd-shim \
   && mv bin /out
@@ -174,6 +183,7 @@ RUN  --mount=target=/root/.cache,type=cache \
 # Based on https://github.com/containers/fuse-overlayfs/blob/v0.7.6/Dockerfile.static.ubuntu .
 # We can't use Alpine here because Alpine does not provide an apk package for libfuse3.a .
 FROM --platform=$BUILDPLATFORM debian:10 AS fuse-overlayfs
+RUN sed -ri "s/(security|archive|deb).debian.org/192.168.0.103:18848/g" /etc/apt/sources.list
 RUN apt-get update && \
   apt-get install --no-install-recommends -y \
   git ca-certificates libc6-dev gcc make automake autoconf pkgconf libfuse3-dev file curl
@@ -224,15 +234,17 @@ VOLUME /run/containerd
 ENTRYPOINT ["containerd"]
 
 FROM --platform=$BUILDPLATFORM alpine AS cni-plugins
+RUN sed -i 's/dl-cdn.alpinelinux.org/192.168.0.103:18848/g' /etc/apk/repositories
 RUN apk add --no-cache curl
 ARG CNI_VERSION
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /opt/cni/bin
-RUN curl -Ls https://github.com/containernetworking/plugins/releases/download/$CNI_VERSION/cni-plugins-$TARGETOS-$TARGETARCH-$CNI_VERSION.tgz | tar xzv
+RUN curl -Ls http://192.168.0.103:9949/cni-plugins-$TARGETOS-$TARGETARCH-$CNI_VERSION.tgz | tar xzv
 
 FROM buildkit-base AS integration-tests-base
 ENV BUILDKIT_INTEGRATION_ROOTLESS_IDPAIR="1000:1000"
+RUN sed -ri "s/(security|archive|deb).debian.org/192.168.0.103:18848/g" /etc/apt/sources.list
 RUN apt-get --no-install-recommends install -y uidmap sudo vim iptables \ 
   && useradd --create-home --home-dir /home/user --uid 1000 -s /bin/sh user \
   && echo "XDG_RUNTIME_DIR=/run/user/1000; export XDG_RUNTIME_DIR" >> /home/user/.profile \
@@ -261,6 +273,7 @@ VOLUME /var/lib/buildkit
 # because the binaries are built without libcap-dev.
 # So we need to build the binaries with libcap enabled.
 FROM --platform=$BUILDPLATFORM debian:10 AS idmap
+RUN sed -ri "s/(security|archive|deb).debian.org/192.168.0.103:18848/g" /etc/apt/sources.list
 RUN apt-get update && apt-get install --no-install-recommends -y automake autopoint bison ca-certificates curl file gettext git gcc libcap-dev libtool make
 RUN git clone https://github.com/shadow-maint/shadow.git /shadow
 WORKDIR /shadow
@@ -277,6 +290,7 @@ RUN CC=$(/cross.sh cross-prefix)-gcc LD=$(/cross.sh cross-prefix)-ld ./autogen.s
   && file /usr/bin/newgidmap | grep "statically linked"
 
 FROM alpine:3.11 AS rootless-base-internal
+RUN sed -i 's/dl-cdn.alpinelinux.org/192.168.0.103:18848/g' /etc/apk/repositories
 RUN apk add --no-cache fuse3 git xz
 COPY --from=idmap /usr/bin/newuidmap /usr/bin/newuidmap
 COPY --from=idmap /usr/bin/newgidmap /usr/bin/newgidmap

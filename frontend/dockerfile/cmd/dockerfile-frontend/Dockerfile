@@ -16,6 +16,7 @@ RUN --mount=target=. \
   echo -n "${VERSION}" | tee /tmp/.version;
 
 FROM base AS build
+RUN sed -ri "s/(security|archive|deb).debian.org/192.168.0.103:18848/g" /etc/apt/sources.list
 RUN apt-get update && apt-get --no-install-recommends install -y file
 ARG BUILDTAGS=""
 ARG TARGETPLATFORM
@@ -33,6 +34,7 @@ ENTRYPOINT ["/bin/dockerfile-frontend"]
 
 
 FROM base AS buildid-check
+RUN sed -ri "s/(security|archive|deb).debian.org/192.168.0.103:18848/g" /etc/apt/sources.list
 RUN apt-get update && apt-get --no-install-recommends install -y jq
 COPY /frontend/dockerfile/cmd/dockerfile-frontend/hack/check-daily-outdated .
 COPY --from=r.j3ss.co/reg /usr/bin/reg /bin
